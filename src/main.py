@@ -2,14 +2,19 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-from pydantic import BaseModel
 import sqlite3
 import uvicorn
-
+from database_wrapper import DBWrapper
+from user_class import User
+from datetime import datetime
+import json
 
 app = FastAPI()
+db = DBWrapper()
 
-authenticated_users = ["MARCEL"]
+active_connections: list[WebSocket] = []
+active_users: dict[str, User] = []
+
 
 # Allow React dev-server origin during development
 app.add_middleware(
@@ -19,30 +24,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# User model
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-    
-# Endpoint for login
-@app.post("/login")
-async def login(request: LoginRequest):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-    "SELECT * FROM users WHERE username=? AND password=? AND approved=1",
-    (request.username, request.password))
-    user = cursor.fetchone()
-    conn.close()
 
-    if user:
-        return {"status": "success", "username": user["username"]}
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+async def retrieve_active_users() -> dict[str, User]:
+    online_users = []
+    for u in active_users:
+        if active_users[u]._isConnected:
+            online_users.append(active_users[u])
+    return online_users
+        
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup logic
-    
+    print("starting")
+    global active_users
+    users = db.get_all_users()
+    active_users = {u._credentials.username: u for u in users}
+
 
     yield  # app is running
 
@@ -51,34 +48,49 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-active_connections: list[WebSocket] = []
-
 @app.websocket("/ws/chat")
 async def chat(ws: WebSocket):
     await ws.accept()
+    auth_data = await ws.receive_json()
+    
     try:
-        auth_msg = await ws.receive_text()
-        if auth_msg not in authenticated_users:
-            logging.error(f"Client {ws.client} rejected with auth: {auth_msg}")
-            await ws.send_text("AUTH_FAILED")
-            await ws.close()
-            return
+        current_user = active_users[auth_data["username"]]
+        print(current_user._credentials)
+        result = await db.login(current_user)
+    except HTTPException:
+        payload = {
+        "type": "response",
+        "session_id": "0",
+        "state": "AUTH_FAILED"
+        }
+        await ws.send_text(json.dumps(payload))
+        print("closing websocket")
+        await ws.close()
+        return
+        
+    active_connections.append(ws)
+    current_user._isConnected = True
+    sessionid = db.create_session_id(current_user, datetime.now().hour)
+    payload = {
+        "type": "response",
+        "session_id": sessionid,
+        "state": "AUTH_SUCCESS"
+    }
+    await ws.send_text(json.dumps(payload))
+    logging.info(f"Client {ws.client} authenticated as {current_user._credentials.username}")
+    a : list[User] = await retrieve_active_users()
+    for i in a:
+        print(f"{i._credentials.username} is Online")
 
-        # Add to active connections only after successful auth
-        active_connections.append(ws)
-        await ws.send_text("AUTH_SUCCESS")
-        logging.info(f"Client {ws.client} authenticated as {auth_msg}")
-
-        # Main chat loop
+    try:
         while True:
             msg = await ws.receive_text()
             for conn in active_connections:
-                await conn.send_text(f"{auth_msg}: {msg}")
-
+                await conn.send_text(f"{current_user._credentials.username}: {msg}")
     except WebSocketDisconnect:
-        if ws in active_connections:
-            active_connections.remove(ws)
-        logging.info("Client %s disconnected", ws.client)
+        active_connections.remove(ws)
+        print(f"User: {current_user._credentials.username} left")
 
 if __name__ == "__main__":
+    db._init_db()
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
