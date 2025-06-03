@@ -26,6 +26,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+*.pyc
+.env
+.env.production
 # databases
 *.db
 
