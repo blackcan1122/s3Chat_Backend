@@ -23,6 +23,8 @@ class DBWrapper:
     # -------------------------------------------------
     async def init_db(self) -> None:
         async with aiosqlite.connect(self.db_path) as conn:
+            if conn is None:
+                print("DB not Found")
             await conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users(

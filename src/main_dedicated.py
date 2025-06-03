@@ -1,14 +1,10 @@
-
 import os
-import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-import sqlite3
 from user_class import Credentials
 import uvicorn
 from database_wrapper import DBWrapper
@@ -16,7 +12,7 @@ from user_class import User
 from datetime import datetime
 import json
 
-from database_wrapper import DBWrapper  # or wherever you keep your DB code
+from database_wrapper import DBWrapper
 
 db = DBWrapper()
 active_connections: list[WebSocket] = []

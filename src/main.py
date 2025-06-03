@@ -1,110 +1,52 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from contextlib import asynccontextmanager
+from envwrap import EnvParam
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from user_class import Credentials
 import uvicorn
-from database_wrapper import DBWrapper
-from user_class import User
-from datetime import datetime
-import json
 from dotenv import load_dotenv
+from backend import Backend
 import os
-
-load_dotenv("../.env")
-
-HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
-PORT = int(os.getenv("BACKEND_PORT", 8000))
-DB_PATH = os.getenv("DB_PATH", "database.db")
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-
-app = FastAPI()
-db = DBWrapper(db_path=DB_PATH)
-
-active_connections: list[WebSocket] = []
-active_users: dict[str, User] = []
+import argparse
 
 
-# Allow React dev-server origin during development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-async def retrieve_active_users() -> dict[str, User]:
-    online_users = []
-    for u in active_users:
-        if active_users[u]._isConnected:
-            online_users.append(active_users[u])
-    return online_users
-        
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    print("starting")
-    global active_users
-    users = await db.get_all_users()
-    active_users = {u._credentials.username: u for u in users}
-
-
-    yield  # app is running
-
-    # shutdown logic (if needed)
-    print("Server shutting down...")
-
-app = FastAPI(lifespan=lifespan)
-
-@app.websocket("/ws/chat")
-async def chat(ws: WebSocket):
-    await ws.accept()
-    auth_data = await ws.receive_json()
     
-# 1. Build credentials exactly as the client supplied them
 
-    username   = auth_data.get("username", "")
-    password   = auth_data.get("password", "")
-    session_id = auth_data.get("session_id", "")
-    print(username)
-    print(password)
-    print(session_id)
-    incoming_user = User(username, password, session_id)
 
-    # 2. Let the DB wrapper validate them
-    try:
-        result = await db.login(incoming_user)
-    except HTTPException:
-        await ws.send_json({"type": "response",
-                            "session_id": "0",
-                            "state": "AUTH_FAILED"})
-        await ws.close()
-        return
-    
-    current_user = active_users[auth_data["username"]]
-    active_connections.append(ws)
-    current_user._isConnected = True
-    sessionid = await db.create_session_id(current_user, datetime.now())
-    payload = {
-        "type": "response",
-        "session_id": sessionid,
-        "state": "AUTH_SUCCESS"
-    }
-    await ws.send_text(json.dumps(payload))
-    #logging.info(f"Client {ws.client} authenticated as {current_user._credentials.username}")
-    a : list[User] = await retrieve_active_users()
-    for i in a:
-        print(f"{i._credentials.username} is Online")
-
-    try:
-        while True:
-            msg = await ws.receive_text()
-            for conn in active_connections:
-                await conn.send_text(f"{current_user._credentials.username}: {msg}")
-    except WebSocketDisconnect:
-        active_connections.remove(ws)
-        print(f"User: {current_user._credentials.username} left")
 
 if __name__ == "__main__":
-    db.init_db()
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=True)
+    parser = argparse.ArgumentParser(description="Start the S3Chat backend server.")
+    parser.add_argument("-dedicated", action="store_true", help="Deployment")
+    args = parser.parse_args()
+
+    if args.dedicated:
+        print("Loading Dedicated Settings")
+        if load_dotenv(".env.production") == False:
+            print("OH OH")
+    else:
+        print("Loading Local Settings")    
+        if load_dotenv(".env") == False:
+            print("OH OH")
+
+    HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
+    PORT = int(os.getenv("BACKEND_PORT", 8000))
+    DB_PATH = os.getenv("DB_PATH", "database.db")
+    ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
+    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, DB_PATH=DB_PATH, ALLOWED_ORIGINS=ALLOWED_ORIGINS)
+    print(f"Using Following Settings for Server Setup:{CurrentEnv}")
+
+    ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    app = FastAPI()
+    if args.dedicated is False:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=ORIGINS,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    CurrentBackend = Backend(app, CurrentEnv, args.dedicated)
+    uvicorn.run(CurrentBackend._app, host=CurrentEnv.HOST, port=CurrentEnv.PORT, reload=False)
