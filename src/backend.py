@@ -25,8 +25,6 @@ class Backend():
         
         router = APIRouter()
 
-        FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
-
         @router.websocket("/ws/chat")
         async def chat(ws: WebSocket):
             print("got a MEssage")
@@ -81,16 +79,9 @@ class Backend():
         async def serve_index():
             return FileResponse("../../frontend/index.html")
 
-#
-# 3) If you expect people to deep‐link (e.g. /some/react/route),
-#    add a “catch‐all” that returns index.html for any unrecognized path—
-#    but do NOT override your API or WebSocket endpoints. For example:
-#
+
         @router.get("/{full_path:path}", include_in_schema=False)
         async def serve_catch_all(full_path: str):
-    # If the requested path starts with “api/” or “ws/”, 
-    # FastAPI would already have routed to your endpoints. 
-    # Any other path (e.g. /chat, /about) should just get index.html:
             return FileResponse("../../frontend/index.html")
         
         if is_dedicated:
