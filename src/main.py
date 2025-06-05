@@ -6,13 +6,11 @@ from dotenv import load_dotenv
 from backend import Backend
 import os
 import argparse
-
-
-    
-
-
+from paths import PathWrap
 
 if __name__ == "__main__":
+    CurrentPaths = PathWrap()
+    CurrentPaths.validate_all_paths()
     parser = argparse.ArgumentParser(description="Start the S3Chat backend server.")
     parser.add_argument("-dedicated", action="store_true", help="Deployment")
     args = parser.parse_args()
@@ -28,22 +26,16 @@ if __name__ == "__main__":
 
     HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
     PORT = int(os.getenv("BACKEND_PORT", 8000))
-    DB_PATH = os.getenv("DB_PATH", "database.db")
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 
-    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, DB_PATH=DB_PATH, ALLOWED_ORIGINS=ALLOWED_ORIGINS)
+    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, ALL_PATHS=CurrentPaths, ALLOWED_ORIGINS=ALLOWED_ORIGINS)
     print(f"Using Following Settings for Server Setup:{CurrentEnv}")
-
-    ORIGINS = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
 
     app = FastAPI()
     if args.dedicated is False:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=ORIGINS,
+            allow_origins=CurrentEnv.ALLOWED_ORIGINS,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],

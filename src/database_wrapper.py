@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from secret import generate_secret_id
 from user_class import User
-
+from eventhandler import EventHandler
 
 class DBWrapper:
     """Asynchronous SQLite wrapper suitable for FastAPI / WebSocket workloads.
@@ -17,6 +17,9 @@ class DBWrapper:
 
     def __init__(self, db_path: str = "database.db"):
         self.db_path = db_path
+        self.event_handler = EventHandler()
+        self.add_user_event = "AddUserEvent"
+        self.remove_user_event = "RemoveUserEvent"
 
     # -------------------------------------------------
     # initialisation
@@ -65,6 +68,7 @@ class DBWrapper:
                     (username, password, int(approved)),
                 )
                 await conn.commit()
+                await self.event_handler.call_event(self.add_user_event)
             except aiosqlite.IntegrityError:
                 raise HTTPException(status_code=409, detail="Username already exists")
 
