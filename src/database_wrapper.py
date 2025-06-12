@@ -86,9 +86,9 @@ class DBWrapper:
 
     async def get_all_users(self) -> List[User]:
         async with self.get_connection() as conn:
-            async with conn.execute("SELECT username, password FROM users") as cursor:
+            async with conn.execute("SELECT username, password, approved FROM users") as cursor:
                 rows = await cursor.fetchall()
-        return [User(username=row["username"], password=row["password"]) for row in rows]
+        return [User(username=row["username"], password=row["password"], approved=row["approved"]) for row in rows]
 
     # -------------------------------------------------
     # Session helpers

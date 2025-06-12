@@ -90,9 +90,20 @@ class Backend():
             return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
 
 
-        @router.get("/{full_path:path}", include_in_schema=False)
-        async def serve_catch_all(full_path: str):
-            return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
+        # @router.get("/{full_path:path}", include_in_schema=False)
+        # async def serve_catch_all(full_path: str):
+        #     return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
+        
+        @router.get("/api/users")
+        async def get_users():
+            print("TEST")
+            return [
+                {
+                    "username": username,
+                    "is_online": user._isConnected
+                }
+                for username, user in self._active_users.items() if user._credentials.approved
+            ]
         
         @router.post("/add_user", status_code=status.HTTP_201_CREATED)
         async def handle_add_user_request(User : UserCreate):
@@ -121,11 +132,8 @@ class Backend():
         await self._db.init_db()
         users = await self._db.get_all_users()
         self._active_users = {u._credentials.username: u for u in users}
-        for u in self._active_users:
-            print(u)
-            pass
 
-    async def retrieve_active_users(self) -> dict[str, User]:
+    async def retrieve_active_users(self) -> list[User]:
         iterable_user = self._active_users
         online_users = []
         for u in iterable_user:
@@ -142,5 +150,5 @@ class Backend():
             print("Updated Array")
             print(self._active_users)
         pass
-    
-    
+
+
