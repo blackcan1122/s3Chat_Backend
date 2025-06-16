@@ -1,7 +1,7 @@
 import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 
 from fastapi import HTTPException
 
@@ -52,7 +52,7 @@ class DBWrapper:
     # Connection helper
     # -------------------------------------------------
     @asynccontextmanager
-    async def get_connection(self):
+    async def get_connection(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
             yield conn

@@ -1,7 +1,8 @@
 import os
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, APIRouter, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, APIRouter, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -52,6 +53,7 @@ class Backend():
                 await ws.send_json({"type": "response",
                                     "session_id": "0",
                                     "state": "AUTH_FAILED"})
+                logging.error(f"Client: {ws.client} not authenticated\nUsername: {username}\nPassword:{password}")
                 await ws.close()
                 return
 
@@ -59,10 +61,15 @@ class Backend():
             self._active_connections.append(ws)
             current_user._isConnected = True
             sessionid = await self._db.create_session_id(current_user, datetime.now())
+            is_admin = False
+            if current_user._credentials.username == "Blackcan":
+                is_admin = True
+
             payload = {
                 "type": "response",
                 "session_id": sessionid,
-                "state": "AUTH_SUCCESS"
+                "state": "AUTH_SUCCESS",
+                "role": is_admin
             }
 
             await ws.send_text(json.dumps(payload))
@@ -79,30 +86,48 @@ class Backend():
                             await conn.send_text(f"{current_user._credentials.username}: {msg}")
                         except (WebSocketDisconnect, RuntimeError):
                             self._active_connections.remove(conn)
+                            current_user._isConnected = False
                             print(f"User: {current_user._credentials.username} left")
                 except (WebSocketDisconnect, RuntimeError):
                     self._active_connections.remove(ws)
+                    current_user._isConnected = False
                     print(f"User: {current_user._credentials.username} left")
                     return
 
         @router.get("/", include_in_schema=False)
         async def serve_index():
             return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
-
-
-        # @router.get("/{full_path:path}", include_in_schema=False)
-        # async def serve_catch_all(full_path: str):
-        #     return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
-        
+          
         @router.get("/api/users")
         async def get_users():
-            print("TEST")
             return [
                 {
                     "username": username,
                     "is_online": user._isConnected
                 }
                 for username, user in self._active_users.items() if user._credentials.approved
+            ]
+        
+        @router.get("/api/all_users")
+        async def get_all_users(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            # The token is now available in credentials.credentials
+            token = credentials.credentials
+
+            # Add your token validation logic here
+            if token != self._env.BEARER_TOKEN:  # You'll need to implement this function
+                raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            
+            return [
+            {
+                "username": username,
+                "is_online": user._isConnected,
+                "is_approved":user._credentials.approved
+            }
+            for username, user in self._active_users.items()
             ]
         
         @router.post("/add_user", status_code=status.HTTP_201_CREATED)
@@ -114,6 +139,11 @@ class Backend():
                 await self._db.add_user(User.username, User.password)
             except HTTPException as e:
                 raise e
+            
+        # catch all other paths
+        @router.get("/{full_path:path}", include_in_schema=False)
+        async def serve_catch_all(full_path: str):
+            return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
 
         if is_dedicated:
             self._app.mount(

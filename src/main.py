@@ -7,6 +7,8 @@ from backend import Backend
 import os
 import argparse
 from paths import PathWrap
+import logging
+from datetime import datetime
 
 if __name__ == "__main__":
     CurrentPaths = PathWrap()
@@ -27,8 +29,9 @@ if __name__ == "__main__":
     HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
     PORT = int(os.getenv("BACKEND_PORT", 8000))
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    BEARER_TOKEN = os.getenv("BEARER_TOKEN")
 
-    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, ALL_PATHS=CurrentPaths, ALLOWED_ORIGINS=ALLOWED_ORIGINS)
+    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, ALL_PATHS=CurrentPaths, ALLOWED_ORIGINS=ALLOWED_ORIGINS, BEARER_TOKEN=BEARER_TOKEN)
     print(f"Using Following Settings for Server Setup:{CurrentEnv}")
 
     app = FastAPI()
@@ -40,5 +43,16 @@ if __name__ == "__main__":
             allow_methods=["*"],
             allow_headers=["*"],
         )
+        
+    log_filename = f"uvicorn_{datetime.now().strftime('%Y-%m-%d')}.log"
+    
+    logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_filename),
+        logging.StreamHandler()
+            ]
+    )
     CurrentBackend = Backend(app, CurrentEnv, args.dedicated)
     uvicorn.run(CurrentBackend._app, host=CurrentEnv.HOST, port=CurrentEnv.PORT, reload=False)

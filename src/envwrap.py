@@ -7,3 +7,4 @@ class EnvParam():
     PORT : str
     ALLOWED_ORIGINS : str
     ALL_PATHS : PathWrap
+    BEARER_TOKEN : str
