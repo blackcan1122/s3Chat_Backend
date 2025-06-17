@@ -19,6 +19,9 @@ class UserCreate(BaseModel):
     username: str
     password: str
 
+class ApproveUserRequest(BaseModel):
+    username: str
+
 
 class Backend():
 
@@ -110,11 +113,9 @@ class Backend():
         
         @router.get("/api/all_users")
         async def get_all_users(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
-            # The token is now available in credentials.credentials
             token = credentials.credentials
 
-            # Add your token validation logic here
-            if token != self._env.BEARER_TOKEN:  # You'll need to implement this function
+            if token != self._env.BEARER_TOKEN:
                 raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
@@ -139,8 +140,43 @@ class Backend():
                 await self._db.add_user(User.username, User.password)
             except HTTPException as e:
                 raise e
+
+
+        @router.post("/api/approve_user")
+        async def approve_user(
+            request: ApproveUserRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+        ):
+            token = credentials.credentials
+
+            if token != self._env.BEARER_TOKEN:
+                raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await self._db.approve_user(request.username)
+            return {"detail": "User approved successfully"}
+        
+
+        @router.post("/api/reject_user")
+        async def reject_user(
+            request: ApproveUserRequest,
+            credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+        ):
+            token = credentials.credentials
+
+            if token != self._env.BEARER_TOKEN:
+                raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await self._db.reject_user(request.username)
+            return {"detail": "User approved successfully"}
             
-        # catch all other paths
+            
+        # catch other urls
         @router.get("/{full_path:path}", include_in_schema=False)
         async def serve_catch_all(full_path: str):
             return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))

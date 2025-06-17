@@ -71,6 +71,24 @@ class DBWrapper:
                 await self.event_handler.call_event(self.add_user_event)
             except aiosqlite.IntegrityError:
                 raise HTTPException(status_code=409, detail="Username already exists")
+            
+    async def approve_user(self, username: str) -> None:
+        async with self.get_connection() as conn:
+            await conn.execute(
+                "UPDATE users SET approved = 1 WHERE username = ?",
+                (username,),
+            )
+            await conn.commit()
+            await self.event_handler.call_event(self.add_user_event)
+
+    async def reject_user(self, username: str) -> None:
+        async with self.get_connection() as conn:
+            await conn.execute(
+                "UPDATE users SET approved = 0 WHERE username = ?",
+                (username,),
+            )
+            await conn.commit()
+            await self.event_handler.call_event(self.add_user_event)
 
     async def get_user(self, username: str) -> Optional[aiosqlite.Row]:
         async with self.get_connection() as conn:
