@@ -2,6 +2,8 @@ import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, AsyncGenerator
+import asyncio
+
 
 from fastapi import HTTPException
 
@@ -68,9 +70,12 @@ class DBWrapper:
                     (username, password, int(approved)),
                 )
                 await conn.commit()
-                await self.event_handler.call_event(self.add_user_event)
+                payload = {"adding": username}
             except aiosqlite.IntegrityError:
                 raise HTTPException(status_code=409, detail="Username already exists")
+            
+            await self.event_handler.call_event(self.add_user_event, payload)
+
             
     async def approve_user(self, username: str) -> None:
         async with self.get_connection() as conn:
@@ -79,7 +84,9 @@ class DBWrapper:
                 (username,),
             )
             await conn.commit()
-            await self.event_handler.call_event(self.add_user_event)
+            payload = {"approve": username}
+
+        await self.event_handler.call_event(self.add_user_event, payload)
 
     async def reject_user(self, username: str) -> None:
         async with self.get_connection() as conn:
@@ -88,7 +95,9 @@ class DBWrapper:
                 (username,),
             )
             await conn.commit()
-            await self.event_handler.call_event(self.add_user_event)
+
+        payload = {"reject": username}
+        asyncio.create_task(self.event_handler.call_event(self.add_user_event, payload))
 
     async def get_user(self, username: str) -> Optional[aiosqlite.Row]:
         async with self.get_connection() as conn:

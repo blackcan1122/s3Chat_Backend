@@ -18,12 +18,6 @@ class EventHandler():
         self._listeners.get(event, []).remove(cb)
     
     async def call_event(self, event: str, payload: Dict[str, Any] | None = None) -> None:
-        payload = payload or {}
-        cbs = self._listeners.get(event, [])
-        if not cbs:
-            return
-        
-        await asyncio.gather(
-            *(cb(event, payload) for cb in cbs),
-            return_exceptions=True,
-        )
+        for cb in self._listeners.get(event, []):
+            # every listener runs in its own task – never blocks the caller
+            asyncio.create_task(cb(event, payload or {}))
