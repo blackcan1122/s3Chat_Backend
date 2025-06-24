@@ -14,6 +14,7 @@ from envwrap import EnvParam
 from pathlib import Path
 import asyncio
 from pydantic import BaseModel
+from typing import Optional
 
 class UserCreate(BaseModel):
     username: str
@@ -21,6 +22,9 @@ class UserCreate(BaseModel):
 
 class ApproveUserRequest(BaseModel):
     username: str
+
+class GetOldMsgRequest(BaseModel):
+    oldest_message: Optional[str] = None
 
 
 class Backend():
@@ -94,6 +98,12 @@ class Backend():
                     
                 try:
                     msg = await ws.receive_text()
+                    backend_payload = {
+                                "type": "message",
+                                "data": msg,
+                                "username": current_user._credentials.username
+                            }
+                    await self._db.add_message(backend_payload)
                     for u, conn in list(self._active_connections.items()):
                         try:
                             payload = {
@@ -219,6 +229,21 @@ class Backend():
         @router.get("/chat")
         async def serve_chat():
             return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
+            
+        @router.post("/api/get_old_msg")
+        async def get_old_msg(request: GetOldMsgRequest):
+            if request.oldest_message:
+                full_str = str(request.oldest_message)
+                raw_str = str()
+                if ':' in full_str:
+                    raw_str = full_str.split(':', 1)[1].lstrip()
+                else:
+                    raw_str = full_str
+                messages = await self._db.get_messages_from(raw_str)
+                return messages
+            else:
+                messages = await self._db.get_messages_from(None)
+                return messages
             
         # catch other urls
         @router.get("/{full_path:path}", include_in_schema=False)

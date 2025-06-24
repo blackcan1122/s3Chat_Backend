@@ -46,6 +46,13 @@ class DBWrapper:
                     expires_at DATETIME NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 );
+                CREATE TABLE IF NOT EXISTS messages(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    sent DATETIME NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
                 """
             )
             await conn.commit()
@@ -226,3 +233,61 @@ class DBWrapper:
 
         # If we reach this point, authentication failed
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    async def add_message(self, message):
+        str_msg = message["data"]
+        username = message["username"]
+        raw_msg = str_msg
+        user_id = None
+
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                "SELECT id FROM users WHERE username = ?", (username,)
+            ) as cursor:
+                user_row = await cursor.fetchone()
+                if not user_row:
+                    raise HTTPException(status_code=404, detail="User not found")
+                user_id = user_row["id"]
+
+            await conn.execute(
+                "INSERT INTO messages (message, user_id, sent) VALUES (?, ?, ?)",
+                (raw_msg, user_id, datetime.now()),
+            )
+            await conn.commit()
+
+    async def get_messages_from(self, start_message: Optional[str] = None) -> list[str]:
+        """
+        If start_message is None, return the 10 newest messages.
+        If start_message is given, return the 10 messages older than that message (by id).
+        """
+        limit = 10
+        async with self.get_connection() as conn:
+            if start_message is None:
+                # Get the 10 newest messages
+                async with conn.execute(
+                    '''SELECT users.username, messages.message, messages.id FROM messages
+                       JOIN users ON messages.user_id = users.id
+                       ORDER BY messages.id DESC LIMIT ?''', (limit,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                # Find the id of the message matching start_message
+                async with conn.execute(
+                    '''SELECT id FROM messages WHERE message = ? ORDER BY id DESC LIMIT 1''', (start_message,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if not row:
+                    return []  # start_message not found
+                start_id = row["id"]
+                # Get 10 messages older than start_id
+                async with conn.execute(
+                    '''SELECT users.username, messages.message, messages.id FROM messages
+                       JOIN users ON messages.user_id = users.id
+                       WHERE messages.id < ?
+                       ORDER BY messages.id DESC LIMIT ?''', (start_id, limit)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+        # Return messages in chronological order (oldest first)
+        return [f"{row['username']}: {row['message']}" for row in reversed(rows)]
+
+

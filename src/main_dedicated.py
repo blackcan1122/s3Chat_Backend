@@ -34,8 +34,6 @@ async def create_tables_at_startup():
     users = await db.get_all_users()
     print(users)
     active_users = {u._credentials.username: u for u in users}
-    for u in active_users:
-        print(u)
 
 app = FastAPI(on_startup=[create_tables_at_startup])
 
