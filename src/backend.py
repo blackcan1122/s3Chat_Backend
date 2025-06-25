@@ -97,6 +97,19 @@ class Backend():
                     self._users_to_disconnect.clear()
                     
                 try:
+                    """
+                    a message object from the frontend would look something like this:
+                    message_data = {
+                        "type": "message",
+                        "data": {
+                            "msg": "Hello, how are you?"
+                        },
+                        "from": "alice",           # sender's username
+                        "to": "bob",               # recipient's username or group id
+                        "chat_type": "direct"      # or "group"
+                    }
+                    
+                    """
                     msg = await ws.receive_text()
                     backend_payload = {
                                 "type": "message",
