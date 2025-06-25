@@ -2,6 +2,7 @@ import aiosqlite
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, AsyncGenerator
+import db_consts as dbc
 import asyncio
 
 
@@ -31,29 +32,13 @@ class DBWrapper:
             if conn is None:
                 print("DB not Found")
             await conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS users(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
-                    approved BOOLEAN NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS sessions(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    session_id TEXT NOT NULL UNIQUE,
-                    created_at DATETIME NOT NULL,
-                    expires_at DATETIME NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                );
-                CREATE TABLE IF NOT EXISTS messages(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message TEXT NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    sent DATETIME NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                );
-                """
+                "\n".join([
+                    dbc.USER_TABLE,
+                    dbc.SESSION_TABLE,
+                    dbc.CONVERSATION_TABLE,
+                    dbc.PARTICIPANTS_TABLE,
+                    dbc.MESSAGE_TABLE
+                ])
             )
             await conn.commit()
 
