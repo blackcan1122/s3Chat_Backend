@@ -5,10 +5,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-from user_class import Credentials
+from db_objects import Credentials
 import uvicorn
 from database_wrapper import DBWrapper
-from user_class import User
+from db_objects import User
 from datetime import datetime
 import json
 

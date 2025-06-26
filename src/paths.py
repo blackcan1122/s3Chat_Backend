@@ -18,7 +18,7 @@ class PathWrap():
 
     db_file:    Path = backend / "database.db"
 
-    paths_to_validate = [_here, root, backend, frontend, public, build, static, db_file]
+    paths_to_validate = [_here, root, backend, frontend, public, build, static]
 
     def validate_all_paths(self):
         state = True

@@ -4,12 +4,13 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, AsyncGenerator
 import db_consts as dbc
 import asyncio
+from db_consts import *
 
 
 from fastapi import HTTPException
 
 from secret import generate_secret_id
-from user_class import User
+from db_objects import User
 from eventhandler import EventHandler
 
 class DBWrapper:
@@ -274,5 +275,26 @@ class DBWrapper:
                     rows = await cursor.fetchall()
         # Return messages in chronological order (oldest first)
         return [f"{row['username']}: {row['message']}" for row in reversed(rows)]
+    
+
+    async def create_conversation(self, name : str | None, type : ConversationType):
+        async with self.get_connection() as conn:
+            await conn.execute(
+                f"INSERT INTO {CONVERSATION_TABLE_NAME} (name, type) VALUES (?, ?)",
+                (name, type.value),
+            )
+            await conn.commit()
+
+    async def create_participants(self, conversation_id, user_id):
+        async with self.get_connection() as conn:
+            await conn.execute(
+                f"INSERT INTO {PARTICIPANTS_TABLE_NAME} (conversation_id, user_id) VALUES (?, ?)",
+                (conversation_id, user_id),
+            )
+            await conn.commit()
+
+    async def add_message_to_history(self, conversation_id):
+        pass
+
 
 

@@ -1,3 +1,17 @@
+from enum import Enum
+
+class ConversationType(Enum):
+    Direct = "direct"
+    Group  = "group"
+
+
+USER_TABLE_NAME = "users"
+SESSION_TABLE_NAME = "sessions"
+CONVERSATION_TABLE_NAME = "conversations"
+PARTICIPANTS_TABLE_NAME = "participants"
+MESSAGE_TABLE_NAME = "messages"
+
+
 USER_TABLE = """CREATE TABLE IF NOT EXISTS users(
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
