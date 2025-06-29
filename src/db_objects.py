@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, APIRouter, status, Depends
 import database_wrapper as dbw
 import db_consts as dbc
+from fastapi import WebSocket
 
 from typing import Optional, List
 import datetime
@@ -17,6 +18,7 @@ class User():
         self._credentials = Credentials(username=username, password=password, session_id = session_id, approved=approved)
         self._id = None
         self._isConnected = False
+        self._active_connection: Optional[WebSocket] = None
 
     def set_credentials(self, cred: Credentials):
         self._credentials = Credentials(**cred.model_dump())
@@ -30,8 +32,10 @@ class User():
                 raise ValueError(f"User '{self._credentials.username}' not found in the database.")
         try:
             self._id = await get_row()
+            return self._id
         except ValueError as e:
             print(e)
+            return None
 
 
 class Conversation():

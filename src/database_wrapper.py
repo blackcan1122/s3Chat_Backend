@@ -220,61 +220,95 @@ class DBWrapper:
         # If we reach this point, authentication failed
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    async def add_message(self, message):
-        str_msg = message["data"]
-        username = message["username"]
-        raw_msg = str_msg
-        user_id = None
 
+    """
+    a message object from the frontend would look something like this:
+    message_data = {
+        "type": "message",
+        "data": {
+            "msg": "Hello, how are you?"
+        },
+        "from": "alice",           # sender's username
+        "to": "bob",               # recipient's username or group id
+        "chat_type": "direct"      # or "group"
+    }
+    
+    """
+    async def add_message(self, message, sender_user : User):
+        str_msg = message["data"]["msg"]
+        convo_id = message["to"]  # conversation_id (int)
+
+        # Get sender's user_id
         async with self.get_connection() as conn:
-            async with conn.execute(
-                "SELECT id FROM users WHERE username = ?", (username,)
-            ) as cursor:
-                user_row = await cursor.fetchone()
-                if not user_row:
-                    raise HTTPException(status_code=404, detail="User not found")
-                user_id = user_row["id"]
-
             await conn.execute(
-                "INSERT INTO messages (message, user_id, sent) VALUES (?, ?, ?)",
-                (raw_msg, user_id, datetime.now()),
+                f"INSERT INTO {dbc.MESSAGE_TABLE_NAME} (conversation_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
+                (convo_id, await sender_user.set_id(), str_msg, datetime.now()),
             )
             await conn.commit()
 
-    async def get_messages_from(self, start_message: Optional[str] = None) -> list[str]:
-        """
-        If start_message is None, return the 10 newest messages.
-        If start_message is given, return the 10 messages older than that message (by id).
-        """
+    async def get_participants_from_convo(self, conversation_id):
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                f"""
+                SELECT u.id as user_id, u.username
+                FROM {PARTICIPANTS_TABLE_NAME} p
+                JOIN users u ON p.user_id = u.id
+                WHERE p.conversation_id = ?
+                """,
+                (conversation_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            return [{"user_id": row["user_id"], "username": row["username"]} for row in rows]
+
+    async def get_messages_from(self, conversation_id: int, last_message: Optional[int] = None) -> list[dict]:
         limit = 10
         async with self.get_connection() as conn:
-            if start_message is None:
-                # Get the 10 newest messages
+            if last_message is None:
+                # Get the 10 newest messages for this conversation
                 async with conn.execute(
-                    '''SELECT users.username, messages.message, messages.id FROM messages
-                       JOIN users ON messages.user_id = users.id
-                       ORDER BY messages.id DESC LIMIT ?''', (limit,)
+                    f'''
+                    SELECT m.id, m.content, m.created_at
+                    FROM {MESSAGE_TABLE_NAME} m
+                    WHERE m.conversation_id = ?
+                    ORDER BY m.id DESC
+                    LIMIT ?
+                    ''',
+                    (conversation_id, limit)
                 ) as cursor:
                     rows = await cursor.fetchall()
             else:
-                # Find the id of the message matching start_message
+                print(last_message)
                 async with conn.execute(
-                    '''SELECT id FROM messages WHERE message = ? ORDER BY id DESC LIMIT 1''', (start_message,)
-                ) as cursor:
-                    row = await cursor.fetchone()
-                if not row:
-                    return []  # start_message not found
-                start_id = row["id"]
-                # Get 10 messages older than start_id
-                async with conn.execute(
-                    '''SELECT users.username, messages.message, messages.id FROM messages
-                       JOIN users ON messages.user_id = users.id
-                       WHERE messages.id < ?
-                       ORDER BY messages.id DESC LIMIT ?''', (start_id, limit)
-                ) as cursor:
-                    rows = await cursor.fetchall()
-        # Return messages in chronological order (oldest first)
-        return [f"{row['username']}: {row['message']}" for row in reversed(rows)]
+                    f'''
+                    SELECT id FROM {MESSAGE_TABLE_NAME}
+                    WHERE conversation_id = ? AND content = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    ''',
+                    (conversation_id, last_message)
+                ) as id_cursor:
+                    id_row = await id_cursor.fetchone()
+                if not id_row:
+                    print("no Row Found")
+                    rows = []
+                else:
+                    message_id = id_row["id"]
+                    print(message_id)
+                    # Get 10 messages older than the found message id
+                    async with conn.execute(
+                        f'''
+                        SELECT m.content
+                        FROM {MESSAGE_TABLE_NAME} m
+                        WHERE m.conversation_id = ? AND m.id < ?
+                        ORDER BY m.id DESC
+                        LIMIT ?
+                        ''',
+                        (conversation_id, message_id, limit)
+                    ) as cursor:
+                        rows = await cursor.fetchall()
+
+        print(rows)
+        return [row["content"] for row in reversed(rows)]
     
 
     async def create_conversation(self, name : str | None, type : ConversationType):
@@ -293,8 +327,74 @@ class DBWrapper:
             )
             await conn.commit()
 
-    async def add_message_to_history(self, conversation_id):
-        pass
+    async def add_message_to_history(self, msg_body, sender : User):
+        if msg_body["room_id"] is not None:
+            async with self.get_connection() as conn:
+                import json
+                await conn.execute(
+                    f"INSERT INTO {MESSAGE_TABLE_NAME} (conversation_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
+                    (
+                        msg_body["room_id"],
+                        sender._credentials.username,
+                        json.dumps(msg_body),
+                        msg_body.get("created_at", datetime.now(timezone.utc)),
+                    ),
+                )
+                await conn.commit()
+            return
+        return
 
+    async def retrieve_direct_convo(self, friend: User, user: User):
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                f"""
+                SELECT c.*
+                FROM {CONVERSATION_TABLE_NAME} c
+                JOIN {PARTICIPANTS_TABLE_NAME} p1 ON c.id = p1.conversation_id
+                JOIN {PARTICIPANTS_TABLE_NAME} p2 ON c.id = p2.conversation_id
+                WHERE p1.user_id = (SELECT id FROM users WHERE username = ?)
+                  AND p2.user_id = (SELECT id FROM users WHERE username = ?)
+                  AND c.type = ?
+                """,
+                (user._credentials.username, friend._credentials.username, ConversationType.Direct.value)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row == None:
+                    return None
+                return row["id"]
+
+    async def create_direct_chat(self, user_a: User, user_b: User):
+        """
+        Create a direct conversation between user_a and user_b, and add both as participants.
+        Returns the conversation id.
+        """
+        async with self.get_connection() as conn:
+            cursor = await conn.execute(
+                f"INSERT INTO {CONVERSATION_TABLE_NAME} (name, type) VALUES (?, ?)",
+                (None, ConversationType.Direct.value),
+            )
+            conversation_id = cursor.lastrowid
+
+            # Get user ids
+            async with conn.execute("SELECT id FROM users WHERE username = ?", (user_a._credentials.username,)) as cur_a:
+                row_a = await cur_a.fetchone()
+            async with conn.execute("SELECT id FROM users WHERE username = ?", (user_b._credentials.username,)) as cur_b:
+                row_b = await cur_b.fetchone()
+            if not row_a or not row_b:
+                raise HTTPException(status_code=404, detail="One or both users not found")
+            user_a_id = row_a["id"]
+            user_b_id = row_b["id"]
+
+            # Add both users as participants
+            await conn.execute(
+                f"INSERT INTO {PARTICIPANTS_TABLE_NAME} (conversation_id, user_id) VALUES (?, ?)",
+                (conversation_id, user_a_id),
+            )
+            await conn.execute(
+                f"INSERT INTO {PARTICIPANTS_TABLE_NAME} (conversation_id, user_id) VALUES (?, ?)",
+                (conversation_id, user_b_id),
+            )
+            await conn.commit()
+        return conversation_id
 
 

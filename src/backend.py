@@ -24,7 +24,12 @@ class ApproveUserRequest(BaseModel):
     username: str
 
 class GetOldMsgRequest(BaseModel):
+    room_id: Optional[int] = None
     oldest_message: Optional[str] = None
+
+class GroupChatRequest(BaseModel):
+    user_a: str
+    user_b: str
 
 
 class Backend():
@@ -34,9 +39,9 @@ class Backend():
         self._app = app
         self._db = DBWrapper(db_path=self._env.ALL_PATHS.db_file)
         self._db.event_handler.add_listener(self._db.add_user_event, self.update_user_array)
-        self._active_connections: dict[str,WebSocket] = {}
-        self._active_users: dict[str, User] = dict()
-        self._users_to_disconnect: list[User] = []
+        self._active_connections: list[str] = []
+        self._registered_users: dict[str, User] = dict()
+        self._users_to_disconnect: list[str] = []
         
         router = APIRouter()
 
@@ -54,6 +59,14 @@ class Backend():
             session_id = auth_data.get("session_id", "")
 
             incoming_user = User(username, password, session_id)
+            incoming_user.set_id()
+            if username in self._active_connections:
+                payload = {
+                    "type": "cmd",
+                    "data": "rejected"
+                }
+                print(f"Sending Logout Command to {username}")
+                await self._registered_users[username]._active_connection.send_text(json.dumps(payload))
 
             try:
                 result = await self._db.login(incoming_user)
@@ -64,9 +77,10 @@ class Backend():
                 logging.error(f"Client: {ws.client} not authenticated\nUsername: {username}\nPassword:{password}")
                 await ws.close()
                 return
-
-            current_user = self._active_users[auth_data["username"]]
-            self._active_connections[username] = ws
+            
+            current_user = self._registered_users[auth_data["username"]]
+            current_user._active_connection = ws
+            self._active_connections.append(current_user._credentials.username) 
             current_user._isConnected = True
             sessionid = await self._db.create_session_id(current_user, datetime.now())
             is_admin = False
@@ -89,11 +103,11 @@ class Backend():
             while True:
                 if len(self._users_to_disconnect) > 0:
                     for u in self._users_to_disconnect:
-                        if u._credentials.username in self._active_connections:
-                            print(f"Disconnecting {u._credentials.username}")
-                            await self._active_connections[u._credentials.username].close()
-                            self._active_connections.pop(u._credentials.username, None)
-                            u._isConnected = False
+                        if u in self._active_connections:
+                            print(f"Disconnecting {u}")
+                            await self._registered_users[u]._active_connection.close()
+                            self._active_connections.remove(u)
+                            self._registered_users[u]._isConnected = False
                     self._users_to_disconnect.clear()
                     
                 try:
@@ -105,36 +119,32 @@ class Backend():
                             "msg": "Hello, how are you?"
                         },
                         "from": "alice",           # sender's username
-                        "to": "bob",               # recipient's username or group id
+                        "room_id": 1,               # recipient's username or group id
                         "chat_type": "direct"      # or "group"
                     }
                     
                     """
-                    msg = await ws.receive_text()
-                    backend_payload = {
-                                "type": "message",
-                                "data": msg,
-                                "username": current_user._credentials.username
-                            }
-                    await self._db.add_message(backend_payload)
-                    for u, conn in list(self._active_connections.items()):
+                    msg = await ws.receive_json()
+                    await self._db.add_message_to_history(msg, current_user)
+                    print(msg)
+                    relevant_users = await self._db.get_participants_from_convo(msg["room_id"])
+                    for u in relevant_users:
                         try:
-                            payload = {
-                                "type": "message",
-                                "data": msg,
-                                "username": current_user._credentials.username
-                            }
-                            await conn.send_text(json.dumps(payload))
+                            if self._registered_users[u["username"]]._active_connection is not None:
+                                await self._registered_users[u["username"]]._active_connection.send_json(msg)
                         except (WebSocketDisconnect, RuntimeError):
-                            self._active_connections.pop(u, None)
+                            self._active_connections.remove(u)
                             current_user._isConnected = False
+                            current_user._active_connection = None
                             print(f"User: {current_user._credentials.username} left")
                             return
                 except (WebSocketDisconnect, RuntimeError):
-                    for u, conn in list(self._active_connections.items()):
-                        if conn == ws:
-                            self._active_connections.pop(u, None)
+                    for u in self._active_connections:
+                        if self._registered_users[u]._active_connection == ws:
+                            print("TEST")
+                            self._active_connections.remove(u)
                             current_user._isConnected = False
+                            current_user._active_connection = None
                             print(f"User: {current_user._credentials.username} left")
                             return
 
@@ -149,7 +159,7 @@ class Backend():
                     "username": username,
                     "is_online": user._isConnected
                 }
-                for username, user in self._active_users.items() if user._credentials.approved
+                for username, user in self._registered_users.items() if user._credentials.approved
             ]
         
         @router.get("/api/all_users")
@@ -169,13 +179,13 @@ class Backend():
                 "is_online": user._isConnected,
                 "is_approved":user._credentials.approved
             }
-            for username, user in self._active_users.items()
+            for username, user in self._registered_users.items()
             ]
         
         @router.post("/add_user", status_code=status.HTTP_201_CREATED)
         async def handle_add_user_request(User : UserCreate):
             print("we Start getting a new user")
-            if User.username in self._active_users:
+            if User.username in self._registered_users:
                 raise HTTPException(status_code=409, detail="UserName is Taken")
             try:
                 await self._db.add_user(User.username, User.password)
@@ -246,17 +256,38 @@ class Backend():
         @router.post("/api/get_old_msg")
         async def get_old_msg(request: GetOldMsgRequest):
             if request.oldest_message:
-                full_str = str(request.oldest_message)
-                raw_str = str()
-                if ':' in full_str:
-                    raw_str = full_str.split(':', 1)[1].lstrip()
-                else:
-                    raw_str = full_str
-                messages = await self._db.get_messages_from(raw_str)
+                messages = await self._db.get_messages_from(request.room_id, request.oldest_message)
                 return messages
             else:
-                messages = await self._db.get_messages_from(None)
+                messages = await self._db.get_messages_from(request.room_id)
                 return messages
+            
+        @router.post("/api/get_room")
+        async def get_room(request: GroupChatRequest):
+            try:
+                userA = self._registered_users[request.user_a]
+                userB = self._registered_users[request.user_b]
+                if userA == userB:
+                    formated_response = {
+                        "room_id": None,
+                        "old_messages": []
+                    }
+                    return formated_response
+            except KeyError:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            response = await self._db.retrieve_direct_convo(userA, userB)
+
+            if response is None:
+                response = await self._db.create_direct_chat(userA, userB)
+
+            old_messages = await self._db.get_messages_from(response)
+            formated_response = {
+                "room_id": response,
+                "old_messages": old_messages
+            }
+            return formated_response
+            
             
         # catch other urls
         @router.get("/{full_path:path}", include_in_schema=False)
@@ -279,10 +310,10 @@ class Backend():
         print("Starting DB Init")
         await self._db.init_db()
         users = await self._db.get_all_users()
-        self._active_users = {u._credentials.username: u for u in users}
+        self._registered_users = {u._credentials.username: u for u in users}
 
     async def retrieve_active_users(self) -> list[User]:
-        iterable_user = self._active_users
+        iterable_user = self._registered_users
         online_users = []
         for u in iterable_user:
             if iterable_user[u]._isConnected:
@@ -297,39 +328,39 @@ class Backend():
             for u in users:
                 if payload is not None and payload.get("reject") == u._credentials.username:
                     print(f"Removing {u._credentials.username} from active users")
-                    self._active_users[u._credentials.username] = u
-                    self._active_users[u._credentials.username]._credentials.approved = False
+                    self._registered_users[u._credentials.username] = u
+                    self._registered_users[u._credentials.username]._credentials.approved = False
                     if u._credentials.username in self._active_connections:
                         payload = {
                             "type": "cmd",
                             "data": "rejected"
                         }
                         print(f"Sending Logout Command to {u._credentials.username}")
-                        await self._active_connections[u._credentials.username].send_text(json.dumps(payload))
+                        await self._registered_users[u._credentials.username]._active_connection.send_text(json.dumps(payload))
                     return
                 
                 if payload is not None and payload.get("approve") == u._credentials.username:
-                    print(f"Removing {u._credentials.username} from active users")
-                    self._active_users[u._credentials.username] = u
-                    self._active_users[u._credentials.username]._credentials.approved = True
+                    print(f"approved {u._credentials.username} from active users")
+                    self._registered_users[u._credentials.username] = u
+                    self._registered_users[u._credentials.username]._credentials.approved = True
                     return
 
                 if payload is not None and payload.get("adding") == u._credentials.username:
-                    if u._credentials.username not in self._active_users:
+                    if u._credentials.username not in self._registered_users:
                         print(f"Adding {u._credentials.username} to active users")
-                        self._active_users[u._credentials.username] = u
+                        self._registered_users[u._credentials.username] = u
                         print("Updated Array")
                         return
                     
                 if payload is not None and payload.get("logout") == u._credentials.username:
-                    if u._credentials.username in self._active_users:
+                    if u._credentials.username in self._registered_users:
                         if u._credentials.username in self._active_connections:
                             payload = {
                                 "type": "cmd",
                                 "data": "rejected"
                             }
                             print(f"Sending Logout Command to {u._credentials.username}")
-                            await self._active_connections[u._credentials.username].send_text(json.dumps(payload))
+                            await self._registered_users[u._credentials.username]._active_connection.send_text(json.dumps(payload))
 
         
         return
