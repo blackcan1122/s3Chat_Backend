@@ -14,11 +14,6 @@ from db_objects import User
 from eventhandler import EventHandler
 
 class DBWrapper:
-    """Asynchronous SQLite wrapper suitable for FastAPI / WebSocket workloads.
-
-    Call ``await init_db()`` once during application startup to create tables.
-    """
-
     def __init__(self, db_path: str = "database.db"):
         self.db_path = db_path
         self.event_handler = EventHandler()
@@ -32,6 +27,8 @@ class DBWrapper:
         async with aiosqlite.connect(self.db_path) as conn:
             if conn is None:
                 print("DB not Found")
+
+            await conn.execute("PRAGMA foreign_keys = ON;")
             await conn.executescript(
                 "\n".join([
                     dbc.USER_TABLE,
@@ -49,8 +46,17 @@ class DBWrapper:
     @asynccontextmanager
     async def get_connection(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         async with aiosqlite.connect(self.db_path) as conn:
+            # Enable foreign keys for this connection
+            await conn.execute("PRAGMA foreign_keys = ON;")
+
+            # Set row factory
             conn.row_factory = aiosqlite.Row
+
+            # Commit to ensure pragma takes effect
+            await conn.commit()
+
             yield conn
+
 
     # -------------------------------------------------
     # User helpers
@@ -264,7 +270,6 @@ class DBWrapper:
         limit = 10
         async with self.get_connection() as conn:
             if last_message is None:
-                # Get the 10 newest messages for this conversation
                 async with conn.execute(
                     f'''
                     SELECT m.id, m.content, m.created_at
@@ -277,7 +282,6 @@ class DBWrapper:
                 ) as cursor:
                     rows = await cursor.fetchall()
             else:
-                print(last_message)
                 async with conn.execute(
                     f'''
                     SELECT id FROM {MESSAGE_TABLE_NAME}
@@ -289,11 +293,9 @@ class DBWrapper:
                 ) as id_cursor:
                     id_row = await id_cursor.fetchone()
                 if not id_row:
-                    print("no Row Found")
                     rows = []
                 else:
                     message_id = id_row["id"]
-                    print(message_id)
                     # Get 10 messages older than the found message id
                     async with conn.execute(
                         f'''
@@ -307,15 +309,41 @@ class DBWrapper:
                     ) as cursor:
                         rows = await cursor.fetchall()
 
-        print(rows)
         return [row["content"] for row in reversed(rows)]
     
+    async def get_user_groups(self, username: str) -> list[dict]:
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                f"""
+                SELECT c.*
+                FROM {CONVERSATION_TABLE_NAME} c
+                JOIN {PARTICIPANTS_TABLE_NAME} p ON c.id = p.conversation_id
+                JOIN {USER_TABLE_NAME} u ON p.user_id = u.id
+                WHERE u.username = ? AND c.type = ?
+                """,
+                (username, ConversationType.Group.value)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
-    async def create_conversation(self, name : str | None, type : ConversationType):
+    async def create_conversation(self, name: str | None, type: ConversationType, creator: int) -> bool:
+        async with self.get_connection() as conn:
+            cursor = await conn.execute(
+                f"INSERT INTO {CONVERSATION_TABLE_NAME} (name, type, creator) VALUES (?, ?, ?)",
+                (name, type.value, creator),
+            )
+            await conn.commit()
+            if cursor.rowcount > 0:
+                conversation_id = cursor.lastrowid
+                await self.create_participants(conversation_id, creator)
+                return True
+                
+
+    async def remove_participant(self, group_id, user_id):
         async with self.get_connection() as conn:
             await conn.execute(
-                f"INSERT INTO {CONVERSATION_TABLE_NAME} (name, type) VALUES (?, ?)",
-                (name, type.value),
+                f"DELETE FROM {PARTICIPANTS_TABLE_NAME} WHERE conversation_id = ? AND user_id = ?",
+                (group_id, user_id),
             )
             await conn.commit()
 
@@ -329,13 +357,14 @@ class DBWrapper:
 
     async def add_message_to_history(self, msg_body, sender : User):
         if msg_body["room_id"] is not None:
+
             async with self.get_connection() as conn:
                 import json
                 await conn.execute(
                     f"INSERT INTO {MESSAGE_TABLE_NAME} (conversation_id, sender_id, content, created_at) VALUES (?, ?, ?, ?)",
                     (
                         msg_body["room_id"],
-                        sender._credentials.username,
+                        await sender.set_id(self),
                         json.dumps(msg_body),
                         msg_body.get("created_at", datetime.now(timezone.utc)),
                     ),

@@ -6,6 +6,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from db_consts import ConversationType
 from database_wrapper import DBWrapper
 from db_objects import User
 from datetime import datetime
@@ -30,6 +31,18 @@ class GetOldMsgRequest(BaseModel):
 class GroupChatRequest(BaseModel):
     user_a: str
     user_b: str
+
+class AddParticipantReq(BaseModel):
+    group_id: int
+    user: str
+
+class RemoveParticipantReq(BaseModel):
+    group_id: int
+    user: str
+
+class CreateGrpReq(BaseModel):
+    creator: int
+    group_name: str
 
 
 class Backend():
@@ -59,7 +72,7 @@ class Backend():
             session_id = auth_data.get("session_id", "")
 
             incoming_user = User(username, password, session_id)
-            incoming_user.set_id()
+            await incoming_user.set_id(self._db)
             if username in self._active_connections:
                 payload = {
                     "type": "cmd",
@@ -67,6 +80,9 @@ class Backend():
                 }
                 print(f"Sending Logout Command to {username}")
                 await self._registered_users[username]._active_connection.send_text(json.dumps(payload))
+                await self._registered_users[username]._active_connection.close()
+                return
+
 
             try:
                 result = await self._db.login(incoming_user)
@@ -82,6 +98,7 @@ class Backend():
             current_user._active_connection = ws
             self._active_connections.append(current_user._credentials.username) 
             current_user._isConnected = True
+            await current_user.set_id(self._db)
             sessionid = await self._db.create_session_id(current_user, datetime.now())
             is_admin = False
             if current_user._credentials.username == "Blackcan":
@@ -90,6 +107,7 @@ class Backend():
             payload = {
                 "type": "response",
                 "session_id": sessionid,
+                "id": current_user._id,
                 "state": "AUTH_SUCCESS",
                 "role": is_admin
             }
@@ -120,13 +138,13 @@ class Backend():
                         },
                         "from": "alice",           # sender's username
                         "room_id": 1,               # recipient's username or group id
+                        "room_name": "Name"         # name of room or friend
                         "chat_type": "direct"      # or "group"
                     }
                     
                     """
                     msg = await ws.receive_json()
                     await self._db.add_message_to_history(msg, current_user)
-                    print(msg)
                     relevant_users = await self._db.get_participants_from_convo(msg["room_id"])
                     for u in relevant_users:
                         try:
@@ -141,7 +159,6 @@ class Backend():
                 except (WebSocketDisconnect, RuntimeError):
                     for u in self._active_connections:
                         if self._registered_users[u]._active_connection == ws:
-                            print("TEST")
                             self._active_connections.remove(u)
                             current_user._isConnected = False
                             current_user._active_connection = None
@@ -287,12 +304,70 @@ class Backend():
                 "old_messages": old_messages
             }
             return formated_response
+        
+        @router.get("/api/get_groups{username}")
+        async def get_groups(username : str):
+            groups = await self._db.get_user_groups(username)
+            return groups
+        
+        @router.get("/api/get_room_msg{group_id}")
+        async def get_room_msg(group_id : int):
+            msg = await self._db.get_messages_from(group_id)
+            return msg
+        
+        @router.get("/api/get_participants{group_id}")
+        async def get_room_msg(group_id : int):
+            msg = await self._db.get_participants_from_convo(group_id)
+            return msg
+        
+        @router.post("/api/add_participant")
+        async def add_participant_to_grp(request: AddParticipantReq):
+            # Get user id from username
+            user_row = await self._db.get_user(request.user)
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_id = user_row["id"]
+
+            # Add participant to the group (conversation)
+            await self._db.create_participants(request.group_id, user_id)
+            return {"detail": f"User {request.user} added to group {request.group_id}"}
+
+        @router.post("/api/remove_participant")
+        async def remove_participant_from_grp(request: RemoveParticipantReq):
+            # Get user id from username
+            user_row = await self._db.get_user(request.user)
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_id = user_row["id"]
+
+            # Check if user is a participant in the group
+            participants = await self._db.get_participants_from_convo(request.group_id)
+            print(participants)
+            print(user_id)
+            if not any(p.get("user_id") == user_id for p in participants):
+                raise HTTPException(status_code=404, detail="User is not a participant in this group")
+
+            # Remove participant from the group (conversation)
+            await self._db.remove_participant(request.group_id, user_id)
+            return {"detail": f"User {request.user} removed from group {request.group_id}"}
+        
+        @router.post("/api/create_group")
+        async def remove_participant_from_grp(request: CreateGrpReq):
+            await self._db.create_conversation(request.group_name, ConversationType.Group, request.creator)
+            return {"response" : f"Group: {request.group_name} was created"}
             
             
         # catch other urls
         @router.get("/{full_path:path}", include_in_schema=False)
         async def serve_catch_all(full_path: str):
-            return FileResponse(str(self._env.ALL_PATHS.build / full_path))
+            print(full_path)
+            file_path = self._env.ALL_PATHS.build / full_path
+            if file_path.exists() and file_path.is_file():
+                print("exist")
+                return FileResponse(str(file_path))
+            else:
+                print("does not exist")
+                raise HTTPException(status_code=404, detail="File not found")
 
         if is_dedicated:
             self._app.mount(
@@ -303,10 +378,19 @@ class Backend():
 
         self._app.include_router(router)
         self._app.add_event_handler("startup", self.create_tables_at_startup)
-        
+
+
+    def check_token(self, payload):
+        token = payload.credentials
+        if token != self._env.BEARER_TOKEN:
+                raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return True
 
     async def create_tables_at_startup(self):
-
         print("Starting DB Init")
         await self._db.init_db()
         users = await self._db.get_all_users()

@@ -1,9 +1,7 @@
 from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, APIRouter, status, Depends
-import database_wrapper as dbw
 import db_consts as dbc
 from fastapi import WebSocket
-
 from typing import Optional, List
 import datetime
 
@@ -23,9 +21,10 @@ class User():
     def set_credentials(self, cred: Credentials):
         self._credentials = Credentials(**cred.model_dump())
 
-    async def set_id(self):
+    async def set_id(self, db_wrapper):
         async def get_row():
-            row = await dbw.DBWrapper.get_user(self._credentials.username)
+            from database_wrapper import DBWrapper
+            row = await db_wrapper.get_user(self._credentials.username)
             if row:
                 return row["id"]
             else:

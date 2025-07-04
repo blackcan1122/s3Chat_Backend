@@ -32,6 +32,7 @@ CONVERSATION_TABLE = """CREATE TABLE IF NOT EXISTS conversations(
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT, -- NULL for 1:1 chats, set for group chats
                         type TEXT NOT NULL CHECK (type IN ('direct', 'group')),
+                        admin INTEGER,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     );"""
@@ -42,7 +43,7 @@ PARTICIPANTS_TABLE = """CREATE TABLE IF NOT EXISTS participants(
                         user_id INTEGER NOT NULL,
                         joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         last_read_message_id INTEGER,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id),
+                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                         FOREIGN KEY (user_id) REFERENCES users(id),
                         UNIQUE(conversation_id, user_id)                      
                     );"""
@@ -53,6 +54,6 @@ MESSAGE_TABLE = """CREATE TABLE IF NOT EXISTS messages(
                         sender_id INTEGER NOT NULL,
                         content TEXT NOT NULL,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id),
-                        FOREIGN KEY (sender_id) REFERENCES users(id)                 
+                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                        FOREIGN KEY (sender_id) REFERENCES users(id)
                     );"""
