@@ -30,8 +30,9 @@ if __name__ == "__main__":
     PORT = int(os.getenv("BACKEND_PORT", 8000))
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     BEARER_TOKEN = os.getenv("BEARER_TOKEN")
+    TENOR_API = os.getenv("TENOR_API")
 
-    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, ALL_PATHS=CurrentPaths, ALLOWED_ORIGINS=ALLOWED_ORIGINS, BEARER_TOKEN=BEARER_TOKEN)
+    CurrentEnv = EnvParam(HOST=HOST, PORT=PORT, ALL_PATHS=CurrentPaths, ALLOWED_ORIGINS=ALLOWED_ORIGINS, BEARER_TOKEN=BEARER_TOKEN, TENOR_API=TENOR_API)
     print(f"Using Following Settings for Server Setup:{CurrentEnv}")
 
     app = FastAPI()

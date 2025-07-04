@@ -8,3 +8,4 @@ class EnvParam():
     ALLOWED_ORIGINS : str
     ALL_PATHS : PathWrap
     BEARER_TOKEN : str
+    TENOR_API : str

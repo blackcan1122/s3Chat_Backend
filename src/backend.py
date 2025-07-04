@@ -16,6 +16,7 @@ from pathlib import Path
 import asyncio
 from pydantic import BaseModel
 from typing import Optional
+import requests
 
 class UserCreate(BaseModel):
     username: str
@@ -319,6 +320,20 @@ class Backend():
         async def get_room_msg(group_id : int):
             msg = await self._db.get_participants_from_convo(group_id)
             return msg
+
+        @router.get("/api/search_gifs{search_term}")
+        async def search_gifs(search_term):
+            self._env.TENOR_API
+            limit = 8
+            ckey = "S3Chat"
+            if search_term is None:
+                search_term = "excited"
+            
+            r = requests.get("https://tenor.googleapis.com/v2/search?q=%s&key=%s&client_key=%s&limit=%s" % (search_term, self._env.TENOR_API, ckey, limit))
+            if r.status_code == 200:
+                top_8gifs = json.loads(r.content)
+                return top_8gifs
+            return HTTPException(status_code=404)
         
         @router.post("/api/add_participant")
         async def add_participant_to_grp(request: AddParticipantReq):
