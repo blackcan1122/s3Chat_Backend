@@ -272,7 +272,12 @@ class Backend():
             return FileResponse(str(self._env.ALL_PATHS.build / "index.html"))
             
         @router.post("/api/get_old_msg")
-        async def get_old_msg(request: GetOldMsgRequest):
+        async def get_old_msg(request: GetOldMsgRequest, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             if request.oldest_message:
                 messages = await self._db.get_messages_from(request.room_id, request.oldest_message)
                 return messages
@@ -281,7 +286,12 @@ class Backend():
                 return messages
             
         @router.post("/api/get_room")
-        async def get_room(request: GroupChatRequest):
+        async def get_room(request: GroupChatRequest, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             try:
                 userA = self._registered_users[request.user_a]
                 userB = self._registered_users[request.user_b]
@@ -307,36 +317,100 @@ class Backend():
             return formated_response
         
         @router.get("/api/get_groups{username}")
-        async def get_groups(username : str):
+        async def get_groups(username : str, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             groups = await self._db.get_user_groups(username)
             return groups
         
         @router.get("/api/get_room_msg{group_id}")
-        async def get_room_msg(group_id : int):
+        async def get_room_msg(group_id : int, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             msg = await self._db.get_messages_from(group_id)
             return msg
         
         @router.get("/api/get_participants{group_id}")
-        async def get_room_msg(group_id : int):
+        async def get_room_msg(group_id : int, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             msg = await self._db.get_participants_from_convo(group_id)
             return msg
 
         @router.get("/api/search_gifs{search_term}")
-        async def search_gifs(search_term):
-            self._env.TENOR_API
+        async def search_gifs(
+            search_term: str,
+            credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+        ):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             limit = 8
             ckey = "S3Chat"
-            if search_term is None:
+            if not search_term:
                 search_term = "excited"
-            
-            r = requests.get("https://tenor.googleapis.com/v2/search?q=%s&key=%s&client_key=%s&limit=%s" % (search_term, self._env.TENOR_API, ckey, limit))
+            r = requests.get(
+            "https://tenor.googleapis.com/v2/search",
+            params={
+                "q": search_term,
+                "key": self._env.TENOR_API,
+                "client_key": ckey,
+                "limit": limit,
+                "contentfilter": "off"
+            }
+            )
             if r.status_code == 200:
-                top_8gifs = json.loads(r.content)
-                return top_8gifs
-            return HTTPException(status_code=404)
+                return json.loads(r.content)
+            raise HTTPException(status_code=404, detail="GIFs not found")
+        
+        @router.get("/api/search_gifs")
+        async def search_gifs_with_pos(
+            search_term: Optional[str] = None,
+            next_token: Optional[str] = None,
+            credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
+        ):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
+            limit = 8
+            ckey = "S3Chat"
+            if not search_term:
+                search_term = "excited"
+            url = "https://tenor.googleapis.com/v2/search"
+            params = {
+                "q": search_term,
+                "key": self._env.TENOR_API,
+                "client_key": ckey,
+                "limit": limit,
+                "contentfilter": "off"
+            }
+            if next_token != "null":
+                params["pos"] = next_token
+            r = requests.get(url, params=params)
+            if r.status_code == 200:
+                return json.loads(r.content)
+            raise HTTPException(status_code=404, detail="GIFs not found")
         
         @router.post("/api/add_participant")
-        async def add_participant_to_grp(request: AddParticipantReq):
+        async def add_participant_to_grp(request: AddParticipantReq, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             # Get user id from username
             user_row = await self._db.get_user(request.user)
             if not user_row:
@@ -348,7 +422,12 @@ class Backend():
             return {"detail": f"User {request.user} added to group {request.group_id}"}
 
         @router.post("/api/remove_participant")
-        async def remove_participant_from_grp(request: RemoveParticipantReq):
+        async def remove_participant_from_grp(request: RemoveParticipantReq, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             # Get user id from username
             user_row = await self._db.get_user(request.user)
             if not user_row:
@@ -367,8 +446,13 @@ class Backend():
             return {"detail": f"User {request.user} removed from group {request.group_id}"}
         
         @router.post("/api/create_group")
-        async def remove_participant_from_grp(request: CreateGrpReq):
+        async def remove_participant_from_grp(request: CreateGrpReq, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
             await self._db.create_conversation(request.group_name, ConversationType.Group, request.creator)
+            try:
+                self.check_token(credentials)
+            except HTTPException as e:
+                raise e
+            
             return {"response" : f"Group: {request.group_name} was created"}
             
             
