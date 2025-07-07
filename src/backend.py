@@ -26,6 +26,7 @@ class ApproveUserRequest(BaseModel):
     username: str
 
 class GetOldMsgRequest(BaseModel):
+    requestor: Optional[int] = None
     room_id: Optional[int] = None
     oldest_message: Optional[str] = None
 
@@ -105,13 +106,19 @@ class Backend():
             if current_user._credentials.username == "Blackcan":
                 is_admin = True
 
+            unread_convos = await self._db.find_unread_messages(current_user)
+            # Print unread conversations for debugging
+
             payload = {
                 "type": "response",
                 "session_id": sessionid,
                 "id": current_user._id,
                 "state": "AUTH_SUCCESS",
-                "role": is_admin
+                "role": is_admin,
+                "unread" : unread_convos
             }
+
+
 
             await ws.send_text(json.dumps(payload))
             logging.info(f"Client {ws.client} authenticated as {current_user._credentials.username}")
@@ -147,6 +154,8 @@ class Backend():
                     msg = await ws.receive_json()
                     await self._db.add_message_to_history(msg, current_user)
                     relevant_users = await self._db.get_participants_from_convo(msg["room_id"])
+                    await self.update_last_read_field(user=self._registered_users[msg["from"]], conversation_id=msg["room_id"])
+
                     for u in relevant_users:
                         try:
                             if self._registered_users[u["username"]]._active_connection is not None:
@@ -277,13 +286,23 @@ class Backend():
                 self.check_token(credentials)
             except HTTPException as e:
                 raise e
-            
+
+            messages = []
             if request.oldest_message:
                 messages = await self._db.get_messages_from(request.room_id, request.oldest_message)
-                return messages
             else:
                 messages = await self._db.get_messages_from(request.room_id)
-                return messages
+
+            # Update last_message_read like in get_room
+            if request.requestor is not None and messages and messages[len(messages)-1] is not None:
+                # Find participant_id for this user in this room
+                user_row = await self._db.get_user_by_id(request.requestor)
+                user = self._registered_users[user_row["username"]]
+                await self.update_last_read_field(user=user, conversation_id=request.room_id)
+            else:
+                print("couldn't find requestor or messages")
+
+            return [msg["content"] for msg in messages]
             
         @router.post("/api/get_room")
         async def get_room(request: GroupChatRequest, credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
@@ -309,10 +328,8 @@ class Backend():
             if response is None:
                 response = await self._db.create_direct_chat(userA, userB)
 
-            old_messages = await self._db.get_messages_from(response)
             formated_response = {
                 "room_id": response,
-                "old_messages": old_messages
             }
             return formated_response
         
@@ -357,18 +374,16 @@ class Backend():
                 raise e
             
             limit = 8
-            ckey = "S3Chat"
             if not search_term:
                 search_term = "excited"
+
             r = requests.get(
-            "https://tenor.googleapis.com/v2/search",
-            params={
-                "q": search_term,
-                "key": self._env.TENOR_API,
-                "client_key": ckey,
-                "limit": limit,
-                "contentfilter": "off"
-            }
+            "api.giphy.com/v1/gifs/search",
+                params={
+                    "api_key": self._env.GIPHY_API,
+                    "q": search_term,
+                    "limit": limit,
+                }
             )
             if r.status_code == 200:
                 return json.loads(r.content)
@@ -377,7 +392,7 @@ class Backend():
         @router.get("/api/search_gifs")
         async def search_gifs_with_pos(
             search_term: Optional[str] = None,
-            next_token: Optional[str] = None,
+            offset: Optional[int] = None,
             credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())
         ):
             try:
@@ -389,16 +404,15 @@ class Backend():
             ckey = "S3Chat"
             if not search_term:
                 search_term = "excited"
-            url = "https://tenor.googleapis.com/v2/search"
-            params = {
-                "q": search_term,
-                "key": self._env.TENOR_API,
-                "client_key": ckey,
-                "limit": limit,
-                "contentfilter": "off"
+            url = "https://api.giphy.com/v1/gifs/search"            
+            params={
+                    "api_key": self._env.GIPHY_API,
+                    "q": search_term,
+                    "limit": limit,
             }
-            if next_token != "null":
-                params["pos"] = next_token
+            print(offset)
+            if offset != 0:
+                params["offset"] = offset
             r = requests.get(url, params=params)
             if r.status_code == 200:
                 return json.loads(r.content)
@@ -478,6 +492,32 @@ class Backend():
         self._app.include_router(router)
         self._app.add_event_handler("startup", self.create_tables_at_startup)
 
+    async def update_last_read_field(self, participant_id=None, user: User = None, conversation_id: int = None):
+        # If user and conversation_id are provided, update last_read for that participant in the conversation
+        if user is not None and conversation_id is not None:
+            # Get participant record for this user in the given conversation
+            participant = await self._db.get_participant_by_user_and_convo(user, conversation_id)
+            if not participant:
+                raise HTTPException(status_code=404, detail="Participant record not found for user in conversation")
+            newest_message = await self._db.get_newest_message_in_conversation(conversation_id)
+            if newest_message:
+                await self._db.update_last_message(participant_id=participant["id"], message_id=newest_message["id"])
+            return
+
+        # If participant_id is provided, update for that participant
+        if participant_id is not None:
+            participant = await self._db.get_participant_by_id(participant_id)
+            if not participant:
+                raise HTTPException(status_code=404, detail="Participant not found")
+            convo_id = participant["conversation_id"]
+            newest_message = await self._db.get_newest_message_in_conversation(convo_id)
+            if not newest_message:
+                return
+            await self._db.update_last_message(participant_id=participant_id, message_id=newest_message["id"])
+            return
+
+        # If neither is provided, raise error
+        raise HTTPException(status_code=400, detail="Must provide either participant_id or user (with conversation_id)")
 
     def check_token(self, payload):
         token = payload.credentials

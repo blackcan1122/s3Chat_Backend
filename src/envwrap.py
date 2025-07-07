@@ -9,3 +9,4 @@ class EnvParam():
     ALL_PATHS : PathWrap
     BEARER_TOKEN : str
     TENOR_API : str
+    GIPHY_API : str

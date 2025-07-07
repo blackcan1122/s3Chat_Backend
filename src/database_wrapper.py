@@ -109,6 +109,33 @@ class DBWrapper:
         async with self.get_connection() as conn:
             async with conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cursor:
                 return await cursor.fetchone()
+            
+    async def get_participant_by_user_and_convo(self, user : User, conversation_id : int):
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                f"""
+                SELECT *
+                FROM {PARTICIPANTS_TABLE_NAME}
+                WHERE user_id = (SELECT id FROM users WHERE username = ?)
+                  AND conversation_id = ?
+                """,
+                (user._credentials.username, conversation_id)
+            ) as cursor:
+                return await cursor.fetchone()
+            
+    async def get_newest_message_in_conversation(self, conversation_id):
+        async with self.get_connection() as conn:
+            async with conn.execute(
+                f"""
+                SELECT *
+                FROM {MESSAGE_TABLE_NAME}
+                WHERE conversation_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (conversation_id,)
+            ) as cursor:
+                return await cursor.fetchone()
 
     async def get_all_users(self) -> List[User]:
         async with self.get_connection() as conn:
@@ -256,7 +283,7 @@ class DBWrapper:
         async with self.get_connection() as conn:
             async with conn.execute(
                 f"""
-                SELECT u.id as user_id, u.username
+                SELECT p.id as participant_id, u.id as user_id, u.username
                 FROM {PARTICIPANTS_TABLE_NAME} p
                 JOIN users u ON p.user_id = u.id
                 WHERE p.conversation_id = ?
@@ -264,7 +291,94 @@ class DBWrapper:
                 (conversation_id,)
             ) as cursor:
                 rows = await cursor.fetchall()
-            return [{"user_id": row["user_id"], "username": row["username"]} for row in rows]
+            return [
+                {
+                    "participant_id": row["participant_id"],
+                    "user_id": row["user_id"],
+                    "username": row["username"]
+                }
+                for row in rows
+            ]
+        
+    async def find_unread_messages(self, user: User):
+        await user.set_id(self)
+
+        async with self.get_connection() as conn:
+            # Get all participant entries for this user
+            async with conn.execute(
+                f"""
+                SELECT p.id as participant_id, p.conversation_id, p.last_read_message_id
+                FROM {PARTICIPANTS_TABLE_NAME} p
+                JOIN users u ON p.user_id = u.id
+                WHERE u.username = ?
+                """,
+                (user._credentials.username,)
+            ) as cursor:
+                participant_rows = await cursor.fetchall()
+
+            unread_conversations = []
+
+            for row in participant_rows:
+                conversation_id = row["conversation_id"]
+                last_read_message_id = row["last_read_message_id"]
+
+                # Count unread messages from others
+                async with conn.execute(
+                    f"""
+                    SELECT COUNT(*) as unread_count
+                    FROM {MESSAGE_TABLE_NAME}
+                    WHERE conversation_id = ?
+                      AND id > COALESCE(?, 0)
+                      AND sender_id != ?
+                    """,
+                    (conversation_id, last_read_message_id, user._id)
+                ) as msg_cursor:
+                    msg_row = await msg_cursor.fetchone()
+                    unread_count = msg_row["unread_count"] if msg_row else 0
+
+                if unread_count > 0:
+                    # Get conversation type and name
+                    async with conn.execute(
+                        f"""
+                        SELECT type, name
+                        FROM {CONVERSATION_TABLE_NAME}
+                        WHERE id = ?
+                        """,
+                        (conversation_id,)
+                    ) as convo_cursor:
+                        convo_row = await convo_cursor.fetchone()
+                    if convo_row is None:
+                        continue
+
+                    convo_type = convo_row["type"]
+                    if convo_type == ConversationType.Direct.value:
+                        # Find the other participant's username
+                        async with conn.execute(
+                            f"""
+                            SELECT u.username
+                            FROM {PARTICIPANTS_TABLE_NAME} p
+                            JOIN users u ON p.user_id = u.id
+                            WHERE p.conversation_id = ? AND u.username != ?
+                            LIMIT 1
+                            """,
+                            (conversation_id, user._credentials.username)
+                        ) as other_cursor:
+                            other_row = await other_cursor.fetchone()
+                        display_name = other_row["username"] if other_row else None
+                    elif convo_type == ConversationType.Group.value:
+                        display_name = convo_row["name"]
+                    else:
+                        display_name = None
+
+                    unread_conversations.append({
+                        **row,
+                        "display_name": display_name,
+                        "type": convo_type,
+                        "unread_count": unread_count
+                    })
+
+            return [conv["display_name"] for conv in unread_conversations if conv["display_name"]]
+
 
     async def get_messages_from(self, conversation_id: int, last_message: Optional[int] = None) -> list[dict]:
         limit = 10
@@ -299,7 +413,7 @@ class DBWrapper:
                     # Get 10 messages older than the found message id
                     async with conn.execute(
                         f'''
-                        SELECT m.content
+                        SELECT m.id, m.content
                         FROM {MESSAGE_TABLE_NAME} m
                         WHERE m.conversation_id = ? AND m.id < ?
                         ORDER BY m.id DESC
@@ -309,7 +423,10 @@ class DBWrapper:
                     ) as cursor:
                         rows = await cursor.fetchall()
 
-        return [row["content"] for row in reversed(rows)]
+        return [
+            {"id": row["id"], "content": row["content"]}
+            for row in reversed(rows)
+        ]
     
     async def get_user_groups(self, username: str) -> list[dict]:
         async with self.get_connection() as conn:
@@ -391,6 +508,14 @@ class DBWrapper:
                 if row == None:
                     return None
                 return row["id"]
+    
+    async def update_last_message(self, participant_id, message_id):
+        async with self.get_connection() as conn:
+            await conn.execute(
+                f"UPDATE {PARTICIPANTS_TABLE_NAME} SET last_read_message_id = ? WHERE id = ?",
+                (message_id, participant_id),
+            )
+            await conn.commit()
 
     async def create_direct_chat(self, user_a: User, user_b: User):
         """
